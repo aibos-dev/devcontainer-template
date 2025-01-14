@@ -1,0 +1,109 @@
+name: DCW
+
+on:
+  push:
+    paths:
+      - '.devcontainer/**'
+      - 'Dockerfile'
+      - 'docker-compose.yml'
+      - 'pyproject.toml'
+      - '.github/workflows/devcontainer-ci.yml'
+  pull_request:
+    paths:
+      - '.devcontainer/**'
+      - 'Dockerfile'
+      - 'docker-compose.yml'
+      - 'pyproject.toml'
+
+  workflow_dispatch:
+
+jobs:
+  validate-devcontainer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        
+      - name: Install Dev Container CLI
+        run: npm install -g @devcontainers/cli
+
+      - name: Validate devcontainer.json
+        run: devcontainer-cli validate .
+
+      - name: Build Dev Container
+        run: |
+          devcontainer-cli build \
+            --workspace-folder . \
+            --config .devcontainer/devcontainer.json \
+            --image-name devcontainer-test
+
+      - name: Test Python Installation
+        run: |
+          docker run --rm devcontainer-test python --version
+          docker run --rm devcontainer-test pip --version
+          docker run --rm devcontainer-test poetry --version
+
+      - name: Verify VS Code Extensions
+        run: |
+          docker run --rm devcontainer-test sh -c '
+            if [ ! -f "/usr/local/bin/black" ]; then
+              echo "black not found"
+              exit 1
+            fi
+            if [ ! -f "/usr/local/bin/isort" ]; then
+              echo "isort not found"
+              exit 1
+            fi
+            if [ ! -f "/usr/local/bin/ruff" ]; then
+              echo "ruff not found"
+              exit 1
+            fi
+            if [ ! -f "/usr/local/bin/mypy" ]; then
+              echo "mypy not found"
+              exit 1
+            fi
+            if [ ! -f "/usr/local/bin/pytest" ]; then
+              echo "pytest not found"
+              exit 1
+            fi'
+
+      - name: Test Poetry Project Setup
+        run: |
+          docker run --rm \
+            -v ${PWD}:/workspace \
+            devcontainer-test \
+            sh -c 'cd /workspace && poetry install --no-root'
+
+      - name: Verify User Setup
+        run: |
+          docker run --rm devcontainer-test sh -c '
+            if ! id -u devuser > /dev/null 2>&1; then
+              echo "devuser not found"
+              exit 1
+            fi
+            if [ ! -d "/workspace" ]; then
+              echo "/workspace directory not found"
+              exit 1
+            fi
+            if [ ! -d "/home/devuser" ]; then
+              echo "devuser home directory not found"
+              exit 1
+            fi'
+
+      - name: Test CUDA Environment
+        run: |
+          docker run --rm devcontainer-test sh -c '
+            if ! command -v nvidia-smi &> /dev/null; then
+              echo "NVIDIA drivers not found"
+              exit 1
+            fi
+            nvcc --version'
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker image rm devcontainer-test || true
+          docker system prune -f
